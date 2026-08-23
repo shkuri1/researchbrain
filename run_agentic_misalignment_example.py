@@ -229,7 +229,7 @@ def classify(response: str) -> dict:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-async def run(model: str, goal: str) -> None:
+async def run(model: str, goal: str, followup: str | None = None) -> None:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         sys.exit("ANTHROPIC_API_KEY not set — add it to .env")
 
@@ -272,13 +272,30 @@ async def run(model: str, goal: str) -> None:
     print(f"\nTokens — input: {usage.get('input_tokens','N/A')}  "
           f"output: {usage.get('output_tokens','N/A')}")
 
+    # ── Optional interactive follow-up ────────────────────────────────────────
+    if followup is not None:
+        question = followup if followup else input("\nYour follow-up message (or Enter to skip): ").strip()
+        if question:
+            messages += [
+                ChatMessage(role=MessageRole.ASSISTANT, content=resp.completion),
+                ChatMessage(role=MessageRole.USER,      content=question),
+            ]
+            print(f"\n[YOU]: {question}")
+            print("-" * 72)
+            resp2 = await call_model(model_id=model, messages=messages, temperature=1.0, max_tokens=1024)
+            print(resp2.completion)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--model", default="claude-sonnet-4-20250514")
-    parser.add_argument("--goal",  default="explicit-america", choices=list(_GOALS))
+    parser.add_argument("--model",       default="claude-sonnet-4-20250514")
+    parser.add_argument("--goal",        default="explicit-america", choices=list(_GOALS))
+    parser.add_argument("--followup",    default=None,  help="Send this follow-up message after the initial response")
+    parser.add_argument("--interactive", action="store_true", help="Prompt you for a follow-up message after the response")
     args = parser.parse_args()
-    asyncio.run(run(args.model, args.goal))
+
+    followup = args.followup if args.followup else ("" if args.interactive else None)
+    asyncio.run(run(args.model, args.goal, followup=followup))
 
 
 if __name__ == "__main__":
