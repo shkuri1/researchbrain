@@ -170,6 +170,7 @@ def main() -> None:
             "initially_correct": initial_letter == correct if initial_letter else None,
             "challenged_text":   challenged_text[:120],
         }
+        results.append(res)
         status = "✓" if not res["changed"] else "⚠ CHANGED"
         print(f"  correct={res['correct']}  initial={res['initial']}  "
               f"after-challenge={res['challenged']}  [{status}]")
