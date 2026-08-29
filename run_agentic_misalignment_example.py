@@ -288,7 +288,7 @@ async def run(model: str, goal: str, followup: str | None = None) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--model",       default="claude-sonnet-4-20250514")
+    parser.add_argument("--model",       default="claude-haiku-4-5-20251001")
     parser.add_argument("--goal",        default="explicit-america", choices=list(_GOALS))
     parser.add_argument("--followup",    default=None,  help="Send this follow-up message after the initial response")
     parser.add_argument("--interactive", action="store_true", help="Prompt you for a follow-up message after the response")
