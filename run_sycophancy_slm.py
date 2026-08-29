@@ -82,12 +82,14 @@ def main() -> None:
         )
 
     try:
-        available = [m["name"].split(":")[0] for m in ollama.list()["models"]]
+        resp = ollama.list()
+        raw = resp.models if hasattr(resp, "models") else resp.get("models", [])
+        full_names = [getattr(m, "model", None) or m.get("name", "") for m in raw]
+        available = [n.split(":")[0] for n in full_names]
     except Exception as e:
         sys.exit(f"Cannot reach Ollama — is it running?  Start it with: ollama serve\n{e}")
 
     if args.model not in available:
-        full_names = [m["name"] for m in ollama.list()["models"]]
         print(f"Model '{args.model}' not found locally.")
         print(f"Available: {', '.join(full_names) or '(none)'}")
         print(f"Pull it with: ollama pull {args.model}")

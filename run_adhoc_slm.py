@@ -34,7 +34,9 @@ except ImportError:
 
 
 def _available_models() -> list[str]:
-    return [m["name"] for m in ollama.list()["models"]]
+    resp = ollama.list()
+    models = resp.models if hasattr(resp, "models") else resp.get("models", [])
+    return [getattr(m, "model", None) or m.get("name", "") for m in models]
 
 
 def _check_model(model: str) -> None:
