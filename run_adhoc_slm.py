@@ -10,11 +10,13 @@ Quick start
 
 Usage
 -----
-    python run_adhoc_slm.py                         # llama3.2, interactive REPL
-    python run_adhoc_slm.py --model mistral         # use Mistral
-    python run_adhoc_slm.py --system "You are..."   # custom system prompt
-    python run_adhoc_slm.py --once "What is 2+2?"   # one-shot, exit immediately
-    python run_adhoc_slm.py --no-stream             # collect full reply before printing
+    python run_adhoc_slm.py                                   # llama3.2, interactive REPL
+    python run_adhoc_slm.py --model mistral                   # use Mistral
+    python run_adhoc_slm.py --system "You are..."             # custom system prompt
+    python run_adhoc_slm.py --once "What is 2+2?"             # one-shot, exit immediately
+    python run_adhoc_slm.py --no-stream                       # collect full reply before printing
+    python run_adhoc_slm.py --thinking                        # show <think> scratchpad
+    python run_adhoc_slm.py --model deepseek-r1 --thinking    # deepseek-r1 has rich scratchpad
 
 REPL commands
 -------------
@@ -25,12 +27,16 @@ REPL commands
 """
 
 import argparse
+import re
 import sys
+import textwrap
 
 try:
     import ollama
 except ImportError:
     sys.exit("ollama package not found — run: pip install ollama")
+
+_THINK_WIDTH = 68
 
 
 def _available_models() -> list[str]:
@@ -53,14 +59,54 @@ def _check_model(model: str) -> None:
         sys.exit(1)
 
 
-def chat(model: str, system: str | None, messages: list[dict], stream: bool) -> str:
+def _print_thinking(think_text: str) -> None:
+    print(f"  ┌─ Thinking {'─' * (_THINK_WIDTH - 10)}┐")
+    for raw_line in think_text.splitlines():
+        for line in textwrap.wrap(raw_line, _THINK_WIDTH - 4) or [""]:
+            print(f"  │ {line:<{_THINK_WIDTH - 4}} │")
+    print(f"  └{'─' * _THINK_WIDTH}┘")
+    print()
+
+
+def _split_thinking(content: str) -> tuple[str | None, str]:
+    """Extract <think>…</think> block; return (think_text, answer)."""
+    m = re.search(r"<think>(.*?)</think>", content, re.DOTALL)
+    if m:
+        think_text = m.group(1).strip()
+        answer = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+        return think_text, answer
+    return None, content
+
+
+def chat(model: str, system: str | None, messages: list[dict], stream: bool, thinking: bool) -> str:
     payload = []
     if system:
         payload.append({"role": "system", "content": system})
     payload.extend(messages)
 
+    # When showing thinking, buffer the full response so we can split out <think> tags.
+    # Streaming + thinking: stream silently, then display think block + answer.
+    if thinking:
+        if stream:
+            chunks: list[str] = []
+            for part in ollama.chat(model=model, messages=payload, stream=True):
+                chunks.append(part["message"]["content"])
+            full = "".join(chunks)
+        else:
+            resp = ollama.chat(model=model, messages=payload)
+            full = resp["message"]["content"]
+
+        think_text, answer = _split_thinking(full)
+        if think_text:
+            _print_thinking(think_text)
+        else:
+            print("  (no <think> block — model may not support scratchpad output)")
+            print()
+        print(answer)
+        return answer
+
     if stream:
-        chunks: list[str] = []
+        chunks = []
         for part in ollama.chat(model=model, messages=payload, stream=True):
             chunk = part["message"]["content"]
             print(chunk, end="", flush=True)
@@ -82,16 +128,26 @@ def main() -> None:
     parser.add_argument("--system",    default=None,        help="System prompt")
     parser.add_argument("--once",      default=None,        help="Send one message and exit")
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming output")
+    parser.add_argument(
+        "--thinking", action="store_true",
+        help="Show model scratchpad — parses <think>…</think> tags emitted by models like deepseek-r1",
+    )
     args = parser.parse_args()
 
     _check_model(args.model)
 
+    if args.thinking and args.model == "llama3.2":
+        print("Note: llama3.2 doesn't emit <think> tags. For a visible scratchpad, try:")
+        print("  ollama pull deepseek-r1   then   --model deepseek-r1 --thinking")
+        print()
+
     stream = not args.no_stream
     system: str | None = args.system
 
-    print(f"Model : {args.model}  [local / Ollama]")
+    print(f"Model    : {args.model}  [local / Ollama]")
+    print(f"Thinking : {'ON — scratchpad shown before each reply' if args.thinking else 'off'}")
     if system:
-        print(f"System: {system[:80]}")
+        print(f"System   : {system[:80]}")
     print("=" * 60)
 
     history: list[dict] = []
@@ -99,8 +155,8 @@ def main() -> None:
     # ── One-shot mode ─────────────────────────────────────────────────────────
     if args.once:
         history.append({"role": "user", "content": args.once})
-        print(f"\n{args.model}: ", end="")
-        chat(args.model, system, history, stream)
+        print(f"\n{args.model}:")
+        chat(args.model, system, history, stream, args.thinking)
         return
 
     # ── Interactive REPL ──────────────────────────────────────────────────────
@@ -138,8 +194,8 @@ def main() -> None:
             continue
 
         history.append({"role": "user", "content": user_input})
-        print(f"\n{args.model}: ", end="")
-        reply = chat(args.model, system, history, stream)
+        print(f"\n{args.model}:")
+        reply = chat(args.model, system, history, stream, args.thinking)
         history.append({"role": "assistant", "content": reply})
         print()
 

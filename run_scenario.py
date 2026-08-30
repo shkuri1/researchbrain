@@ -10,6 +10,8 @@ Usage
     python3 run_scenario.py scenarios/sycophancy_basic.yaml
     python3 run_scenario.py scenarios/authority_pressure.yaml --provider slm
     python3 run_scenario.py scenarios/my_demo.yaml --model mistral --provider slm
+    python3 run_scenario.py scenarios/self_awareness.yaml --thinking
+    python3 run_scenario.py scenarios/self_awareness.yaml --provider slm --model deepseek-r1 --thinking
 
 Scenario file format (YAML)
 ----------------------------
@@ -23,7 +25,9 @@ Scenario file format (YAML)
 
 import argparse
 import os
+import re
 import sys
+import textwrap
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -35,18 +39,48 @@ try:
 except ImportError:
     sys.exit("PyYAML not found — run: pip3 install PyYAML")
 
+_THINK_WIDTH = 70
+
+
+def _print_thinking(think_text: str | None) -> None:
+    if not think_text:
+        return
+    bar = "─" * _THINK_WIDTH
+    print(f"  ┌─ Thinking {'─' * (_THINK_WIDTH - 10)}┐")
+    for raw_line in think_text.splitlines():
+        for line in textwrap.wrap(raw_line, _THINK_WIDTH - 4) or [""]:
+            print(f"  │ {line:<{_THINK_WIDTH - 4}} │")
+    print(f"  └{bar}┘")
+
 
 # ── Provider backends ─────────────────────────────────────────────────────────
 
-def ask_claude(client, model: str, system: str | None, messages: list[dict], max_tokens: int) -> str:
-    kwargs = dict(model=model, max_tokens=max_tokens, messages=messages)
+def ask_claude(
+    client, model: str, system: str | None, messages: list[dict],
+    max_tokens: int, thinking: bool = False,
+) -> tuple[str, str | None]:
+    kwargs = dict(model=model, messages=messages)
     if system:
         kwargs["system"] = system
+    if thinking:
+        kwargs["thinking"]   = {"type": "enabled", "budget_tokens": 5000}
+        kwargs["max_tokens"] = max(max_tokens, 8000)
+    else:
+        kwargs["max_tokens"] = max_tokens
     r = client.messages.create(**kwargs)
-    return r.content[0].text.strip()
+    think_text, answer_text = None, ""
+    for block in r.content:
+        if block.type == "thinking":
+            think_text = block.thinking
+        elif block.type == "text":
+            answer_text = block.text
+    return answer_text.strip(), think_text
 
 
-def ask_ollama(model: str, system: str | None, messages: list[dict], max_tokens: int) -> str:
+def ask_ollama(
+    model: str, system: str | None, messages: list[dict],
+    max_tokens: int, thinking: bool = False,
+) -> tuple[str, str | None]:
     import ollama
     payload = []
     if system:
@@ -55,9 +89,14 @@ def ask_ollama(model: str, system: str | None, messages: list[dict], max_tokens:
     resp = ollama.chat(
         model=model,
         messages=payload,
-        options={"num_predict": max_tokens, "temperature": 0.7},
+        options={"num_predict": max(max_tokens, 2048) if thinking else max_tokens, "temperature": 0.7},
     )
-    return resp["message"]["content"].strip()
+    content = resp["message"]["content"].strip()
+    m = re.search(r"<think>(.*?)</think>", content, re.DOTALL)
+    think_text = m.group(1).strip() if m else None
+    if m:
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+    return content, think_text
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -66,10 +105,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("scenario",             help="Path to scenario YAML file")
+    parser.add_argument("scenario",               help="Path to scenario YAML file")
     parser.add_argument("--provider", default="claude", choices=["claude", "slm"])
     parser.add_argument("--model",    default=None)
     parser.add_argument("--max-tokens", type=int, default=256)
+    parser.add_argument(
+        "--thinking", action="store_true",
+        help="Show model scratchpad (extended thinking for Claude; <think> tags for SLMs like deepseek-r1)",
+    )
     args = parser.parse_args()
 
     scenario_path = Path(args.scenario)
@@ -97,13 +140,17 @@ def main() -> None:
             sys.exit("ANTHROPIC_API_KEY not set — add it to .env")
         model = args.model or "claude-haiku-4-5-20251001"
         client = anthropic.Anthropic(api_key=api_key)
-        ask = lambda msgs, mt: ask_claude(client, model, system, msgs, mt)
+        ask = lambda msgs, mt: ask_claude(client, model, system, msgs, mt, args.thinking)
     else:
         try:
             import ollama
         except ImportError:
             sys.exit("ollama package not found — run: pip3 install ollama")
         model = args.model or "llama3.2"
+        if args.thinking and model == "llama3.2":
+            print("Note: llama3.2 has no built-in scratchpad. For visible thinking, try:")
+            print("  ollama pull deepseek-r1   then   --model deepseek-r1 --thinking")
+            print()
         try:
             resp = ollama.list()
             raw = resp.models if hasattr(resp, "models") else resp.get("models", [])
@@ -115,11 +162,12 @@ def main() -> None:
             sys.exit(f"Cannot reach Ollama — is it running?  ollama serve\n{e}")
         if model not in available:
             sys.exit(f"Model '{model}' not pulled.\nRun: ollama pull {model}")
-        ask = lambda msgs, mt: ask_ollama(model, system, msgs, mt)
+        ask = lambda msgs, mt: ask_ollama(model, system, msgs, mt, args.thinking)
 
     # ── Run scenario ──────────────────────────────────────────────────────────
     print(f"Scenario : {name}")
     print(f"Provider : {args.provider.upper()} / {model}")
+    print(f"Thinking : {'ON' if args.thinking else 'off'}")
     if system:
         print(f"System   : {system[:80]}")
     print("=" * 72)
@@ -131,10 +179,13 @@ def main() -> None:
         print("-" * 60)
 
         history.append({"role": "user", "content": turn_text})
-        reply = ask(history, args.max_tokens)
-        history.append({"role": "assistant", "content": reply})
+        reply, think_text = ask(history, args.max_tokens)
+
+        if args.thinking:
+            _print_thinking(think_text)
 
         print(f"{model}: {reply}")
+        history.append({"role": "assistant", "content": reply})
 
     print("\n" + "=" * 72)
     print(f"Scenario complete — {len(turns)} turns")
