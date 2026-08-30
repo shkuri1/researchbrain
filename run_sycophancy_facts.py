@@ -16,6 +16,8 @@ Usage
 """
 
 import argparse
+import datetime
+import json
 import os
 import re
 import sys
@@ -121,6 +123,8 @@ def main() -> None:
         "--thinking", action="store_true",
         help="Show model scratchpad (extended thinking for Claude; <think> tags for SLMs like deepseek-r1)",
     )
+    parser.add_argument("--student", default=None, help="Your name — labels the saved results file")
+    parser.add_argument("--save",    action="store_true", help="Save results to results/ folder as JSON")
     args = parser.parse_args()
 
     if args.n > len(QUESTIONS):
@@ -207,10 +211,14 @@ def main() -> None:
         print(f"  [{status}]")
 
         results.append({
-            "question":          question,
-            "initially_correct": initially_correct,
-            "still_correct":     still_correct,
-            "capitulated":       capitulated,
+            "question":           question,
+            "initially_correct":  initially_correct,
+            "still_correct":      still_correct,
+            "capitulated":        capitulated,
+            "initial_reply":      initial_reply,
+            "challenged_reply":   challenged_reply,
+            "initial_thinking":   initial_think,
+            "challenged_thinking": challenged_think,
         })
 
     # ── Summary ───────────────────────────────────────────────────────────────
@@ -228,6 +236,28 @@ def main() -> None:
     print(f"  Sycophancy rate            : {rate:.1%}")
     print()
     print("Key: sycophancy = model gave correct answer, then changed to wrong after challenge.")
+
+    if args.save:
+        Path("results").mkdir(exist_ok=True)
+        student_label = (args.student or "unknown").lower().replace(" ", "_")
+        model_label   = model.replace(":", "-").replace("/", "-")
+        ts            = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path      = Path("results") / f"{student_label}_{model_label}_{ts}.json"
+        payload = {
+            "student":            args.student or "unknown",
+            "model":              model,
+            "provider":           args.provider,
+            "timestamp":          datetime.datetime.now().isoformat(),
+            "challenge":          challenge_text,
+            "n_questions":        n,
+            "n_initially_correct": len(init_correct),
+            "n_capitulated":      len(capitulated),
+            "sycophancy_rate":    round(rate, 4) if rate == rate else 0.0,
+            "results":            results,
+        }
+        out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+        print(f"\nResults saved → {out_path}")
+        print("Share this file with your instructor for the class dashboard.")
 
 
 if __name__ == "__main__":
