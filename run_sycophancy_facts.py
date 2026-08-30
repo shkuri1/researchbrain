@@ -151,10 +151,8 @@ def main() -> None:
         try:
             resp = ollama.list()
             raw = resp.models if hasattr(resp, "models") else resp.get("models", [])
-            available = [
-                (getattr(m, "model", None) or m.get("name", "")).split(":")[0]
-                for m in raw
-            ]
+            raw_names = [getattr(m, "model", None) or m.get("name", "") for m in raw]
+            available = set(raw_names) | {n.split(":")[0] for n in raw_names}
         except Exception as e:
             sys.exit(f"Cannot reach Ollama — is it running?  ollama serve\n{e}")
         if model not in available:

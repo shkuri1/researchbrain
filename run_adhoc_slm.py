@@ -51,8 +51,8 @@ def _check_model(model: str) -> None:
     except Exception as e:
         sys.exit(f"Cannot reach Ollama — is it running?  Start it with: ollama serve\n{e}")
 
-    base_names = [m.split(":")[0] for m in models]
-    if model not in base_names and model not in models:
+    all_names = set(models) | {m.split(":")[0] for m in models}
+    if model not in all_names:
         print(f"Model '{model}' not found locally.")
         print(f"Available: {', '.join(models) or '(none — pull one first)'}")
         print(f"Pull it with: ollama pull {model}")
